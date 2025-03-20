@@ -1,47 +1,74 @@
 import praw
-from datetime import datetime, timezone
 from dotenv import load_dotenv
 import os
+import pandas as pd
+import time
+from prawcore.exceptions import TooManyRequests
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Reddit API credentials
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 USER_AGENT = os.getenv("USER_AGENT")
 
-# Inisialisasi Reddit API dengan PRAW
+# Set up Reddit API client
 reddit = praw.Reddit(
     client_id=CLIENT_ID,
     client_secret=CLIENT_SECRET,
     user_agent=USER_AGENT
 )
 
-# Pilih subreddit yang ingin diambil datanya
-subreddit_name = 'memes'  # Ganti dengan subreddit yang kamu inginkan
-subreddit = reddit.subreddit(subreddit_name)
+# List of subreddits to fetch data from
+subreddits = ['AskReddit', 'funny', 'memes', 'teenagers', 'OutOfTheLoop', 'soccer', 'gaming', 'NoStupidQuestions']
+total_posts_needed = 5000  # Total number of posts to fetch
+posts_per_subreddit = total_posts_needed // len(subreddits)  # Fetch evenly from each subreddit
 
-# Tentukan tanggal awal untuk tahun 2022
-start_timestamp = datetime(2019, 1, 1).timestamp()
+# Create a list to hold the fetched data
+data = []
 
-# Cetak start_timestamp untuk memeriksa apakah nilainya sesuai
-print("Start Timestamp for 2022-01-01:", start_timestamp)
+# Fetch posts from each subreddit
+for subreddit_name in subreddits:
+    subreddit = reddit.subreddit(subreddit_name)
+    count = 0
+    for submission in subreddit.hot(limit=posts_per_subreddit):
+        try:
+            title = submission.title
+            text = submission.selftext
+            upvotes = submission.score
+            comments_count = submission.num_comments
+            timestamp = submission.created_utc
+            subreddit_name = submission.subreddit.display_name
 
-# Ambil 5 postingan top dalam waktu "all" (semua waktu) dan filter berdasarkan tahun
-for submission in subreddit.top(time_filter='all', limit=5):  # Ambil 5 postingan teratas
-    # Cetak timestamp untuk debugging
-    print(f"Submission created_utc: {submission.created_utc}")
-    
-    # Filter postingan yang dibuat setelah 1 Januari 2022
-    if submission.created_utc >= start_timestamp:
-        # Konversi timestamp menjadi waktu yang dapat dibaca
-        submission_time = datetime.fromtimestamp(submission.created_utc, timezone.utc)
-        
-        # Cetak detail postingan jika tersedia
-        print("Title:", submission.title if submission.title else "No title")
-        print("Score:", submission.score if submission.score else "No score")
-        print("URL:", submission.url if submission.url else "No URL")
-        print("Date:", submission_time.strftime('%Y-%m-%d %H:%M:%S'))
-        print("Text:", submission.selftext if submission.selftext else "No text")
-        print('-' * 80)
+            # Extracting comments
+            comments_data = []
+            submission.comments.replace_more(limit=0)  # This removes 'MoreComments' objects that can be tricky to handle
+            for comment in submission.comments.list():
+                comment_text = comment.body
+                comment_upvotes = comment.score
+                comment_timestamp = comment.created_utc
+                comments_data.append([comment_text, comment_upvotes, comment_timestamp])
+
+            # Add post data
+            data.append([title, text, upvotes, comments_count, timestamp, subreddit_name, comments_data])
+
+            count += 1
+            if count >= posts_per_subreddit:
+                break
+
+        except TooManyRequests as e:
+            print("Rate limit hit. Sleeping for 60 seconds...")
+            time.sleep(60)  # Sleep for 60 seconds before retrying
+            continue
+
+        # Optional: Sleep for a few seconds between requests to reduce the risk of hitting rate limits
+        time.sleep(2)  # Adjust the sleep time if needed
+
+# Convert to a pandas DataFrame
+df = pd.DataFrame(data, columns=['Title', 'Text', 'Upvotes', 'Comments', 'Timestamp', 'Subreddit', 'Comments Data'])
+
+# Save the raw data to a CSV (optional)
+df.to_csv('reddit_data_with_comments.csv', index=False)
+
+# Display the first few rows
+print(df.head())
